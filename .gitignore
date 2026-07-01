@@ -14,7 +14,6 @@ dist/
 .venv/
 venv/
 env/
-docs/
 
 # User specific
 localfiler_settings.json
