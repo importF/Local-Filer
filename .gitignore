@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+*.spec
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+.venv/
+venv/
+env/
+docs/
+
+# User specific
+localfiler_settings.json
+Outputs/
+Downloads/
+Covers/
+
+# Download on setup
+ffmpeg.exe
+ffprobe.exe
+yt-dlp.exe
+
+# Claude
+CLAUDE.md
+.claude/
+.superpowers/
+handoff.md
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Dev build
+tests/
+tools/
