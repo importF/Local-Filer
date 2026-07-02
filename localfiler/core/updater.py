@@ -98,11 +98,8 @@ def download_and_stage(url: str, progress_cb: ProgressCb | None = None,
     if progress_cb:
         progress_cb(1.0)
 
-    # The release zip has one top-level app folder (e.g. "Local Filer/").
-    entries = [p for p in stage_root.iterdir() if p.is_dir()]
-    if len(entries) != 1:
-        raise RuntimeError("Unexpected update archive layout.")
-    return entries[0]
+    # The release zip's top level *is* the app folder: the exe plus _internal/.
+    return stage_root
 
 
 # A separate process does the actual file swap, since the running exe and its
@@ -122,7 +119,10 @@ if not errorlevel 1 (
     goto wait
 )
 
-robocopy "%SRC%" "%DEST%" /MIR /R:5 /W:2 /NFL /NDL /NJH /NJS >nul
+REM Only replace the app's own files (exe + _internal/); leave user data
+REM (Outputs, Covers, Downloads, settings, ffmpeg/yt-dlp) untouched.
+robocopy "%SRC%\\_internal" "%DEST%\\_internal" /MIR /R:5 /W:2 /NFL /NDL /NJH /NJS >nul
+robocopy "%SRC%" "%DEST%" "%EXE%" /R:5 /W:2 /NFL /NDL /NJH /NJS >nul
 
 start "" "%DEST%\\%EXE%"
 
