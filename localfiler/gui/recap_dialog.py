@@ -1,9 +1,10 @@
 """End-of-bulk recap: a scrollable list of every song and the tags applied.
 
-Saved songs show their cover + tags with an Edit button; skipped downloads show
-an Open button (deleted only when the recap closes). Covers are interactive:
-left-click to copy then click others to paste, or right-click to apply to all
-songs / the album. Returns ``action`` (CLOSE/EDIT) + ``edit_index``.
+Saved songs show cover + tags with an Edit button; "kept" songs (Tag Folder
+recap-only) show the same but with a "no changes" badge and a Save button.
+Skipped downloads get an Open button and are deleted on close; kept files
+never are. Covers: left-click to copy/paste, right-click to apply to
+all/album. Returns ``action`` (CLOSE/EDIT) + ``edit_index``.
 """
 
 from __future__ import annotations
@@ -108,8 +109,12 @@ class RecapDialog(QDialog):
         self.setMinimumSize(600, 520)
 
         saved_count = statuses.count("saved")
+        kept_count = statuses.count("kept")
+        summary = f"{saved_count} of {len(jobs)} saved"
+        if kept_count:
+            summary += f", {kept_count} kept as-is"
         intro = QLabel(
-            f"{saved_count} of {len(jobs)} saved. Click <b>Edit</b> to fix a song. "
+            f"{summary}. Click <b>Edit</b> to fix a song. "
             "Left-click a cover to copy it, then click other songs to paste; "
             "right-click a cover to apply it to all songs or the whole album."
         )
@@ -182,19 +187,21 @@ class RecapDialog(QDialog):
         frame.setFrameShape(QFrame.Shape.StyledPanel)
         row = QHBoxLayout(frame)
 
-        if status == "saved":
+        if status in ("saved", "kept"):
             thumb = _CoverThumb(index, self.THUMB_SIZE)
             thumb.set_image(self._cover_bytes(job))
             if self._apply_cover_cb is not None:
                 thumb.left_clicked.connect(self._on_left)
                 thumb.right_clicked.connect(self._on_right)
-            self._thumbs[index] = thumb
+                self._thumbs[index] = thumb
             row.addWidget(thumb, 0, Qt.AlignmentFlag.AlignTop)
 
             meta = job.metadata
             title = (meta.title or job.path.stem).strip()
             artist = (meta.artist or "").strip()
             head = f"<b>{_esc(title)}</b>" + (f" — {_esc(artist)}" if artist else "")
+            if status == "kept":
+                head += "  <span style='color:#f4b400; font-size:11px;'>● no changes</span>"
 
             bits = []
             if meta.album:
@@ -216,10 +223,12 @@ class RecapDialog(QDialog):
             col.addWidget(dest)
             row.addLayout(col, 1)
 
-            edit_btn = QPushButton("Edit")
-            edit_btn.setFixedWidth(72)
-            edit_btn.clicked.connect(lambda _=False, i=index: self._edit(i))
-            row.addWidget(edit_btn, 0, Qt.AlignmentFlag.AlignTop)
+            btn = QPushButton("Edit" if status == "saved" else "Save")
+            btn.setFixedWidth(72)
+            if status == "kept":
+                btn.setToolTip("Reopen this song's preview to actually save these tags")
+            btn.clicked.connect(lambda _=False, i=index: self._edit(i))
+            row.addWidget(btn, 0, Qt.AlignmentFlag.AlignTop)
         else:
             note = "will be deleted on close" if job.is_download else "skipped (unchanged)"
             label = QLabel(f"{_esc(job.path.stem)} — <i>{note}</i>")
@@ -337,7 +346,7 @@ class RecapDialog(QDialog):
         return covers.save_bytes(data, meta.artist or "", meta.album or "", meta.title or "")
 
     def _saved_indices(self) -> list[int]:
-        return [i for i, s in enumerate(self.statuses) if s == "saved"]
+        return [i for i, s in enumerate(self.statuses) if s in ("saved", "kept")]
 
     # -------------------------------------------------------------- finishing
     def _edit(self, index: int) -> None:

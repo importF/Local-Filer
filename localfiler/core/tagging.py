@@ -129,12 +129,20 @@ def _write_id3(path, meta, cover_path, remove_cover) -> None:
 
     if meta.title:
         tags.setall("TIT2", [TIT2(encoding=3, text=meta.title)])
+    else:
+        tags.delall("TIT2")
     if meta.artist:
         tags.setall("TPE1", [TPE1(encoding=3, text=meta.artist)])
+    else:
+        tags.delall("TPE1")
     if meta.album:
         tags.setall("TALB", [TALB(encoding=3, text=meta.album)])
+    else:
+        tags.delall("TALB")
     if meta.year:
         tags.setall("TDRC", [TDRC(encoding=3, text=meta.year)])
+    else:
+        tags.delall("TDRC")
 
     track = (getattr(meta, "track", "") or "").strip()
     if track:
@@ -197,12 +205,20 @@ def _write_mp4(path, meta, cover_path, remove_cover) -> None:
 
     if meta.title:
         audio["\xa9nam"] = [meta.title]
+    elif "\xa9nam" in audio:
+        del audio["\xa9nam"]
     if meta.artist:
         audio["\xa9ART"] = [meta.artist]
+    elif "\xa9ART" in audio:
+        del audio["\xa9ART"]
     if meta.album:
         audio["\xa9alb"] = [meta.album]
+    elif "\xa9alb" in audio:
+        del audio["\xa9alb"]
     if meta.year:
         audio["\xa9day"] = [meta.year]
+    elif "\xa9day" in audio:
+        del audio["\xa9day"]
 
     track = (getattr(meta, "track", "") or "").strip()
     if track:
@@ -257,12 +273,20 @@ def _read_vorbis(audio) -> dict:
 def _apply_vorbis_text(audio, meta) -> None:
     if meta.title:
         audio["title"] = meta.title
+    elif "title" in audio:
+        del audio["title"]
     if meta.artist:
         audio["artist"] = meta.artist
+    elif "artist" in audio:
+        del audio["artist"]
     if meta.album:
         audio["album"] = meta.album
+    elif "album" in audio:
+        del audio["album"]
     if meta.year:
         audio["date"] = meta.year
+    elif "date" in audio:
+        del audio["date"]
 
     track = (getattr(meta, "track", "") or "").strip()
     if track:

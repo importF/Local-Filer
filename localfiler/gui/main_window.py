@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 
 from .. import config
 from ..core import covers, downloader, tagging
+from ..models import SongMetadata
 from .drop import DropTarget
 from .preview_dialog import PreviewDialog
 from .recap_dialog import RecapDialog
@@ -52,6 +53,7 @@ class MainWindow(QWidget):
         self._worker = None  # keep a reference so the QThread isn't GC'd
         self._current_flow = "download"  # "download" or "scan" (for cancel wording)
         self._scan_progress = None  # live progress window during a Tag Folder scan
+        self._recap_only = False  # "Only show recap" for the batch in progress
 
         self._yt_worker = None  # keep update/check QThread alive while running
 
@@ -176,6 +178,9 @@ class MainWindow(QWidget):
         self.scan_btn = QPushButton("Scan && Tag Folder")
         self.scan_btn.clicked.connect(self._start_scan)
 
+        self.tag_recap_only_check = QCheckBox("Only show recap")
+        self.tag_recap_only_check.setToolTip("Skip search; read tags locally, straight to recap.")
+
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
         sep.setStyleSheet("color: #333;")
@@ -196,6 +201,7 @@ class MainWindow(QWidget):
         layout.addWidget(QLabel("Folder to tag:"))
         layout.addLayout(folder_row)
         layout.addWidget(self.scan_btn)
+        layout.addWidget(self.tag_recap_only_check)
         layout.addSpacing(8)
         layout.addWidget(sep)
         layout.addSpacing(8)
@@ -332,6 +338,7 @@ class MainWindow(QWidget):
         target = self._selected_target_dir()
         audio_format = self.format_combo.currentData() or "mp3"
         number_tracks = self.number_tracks_check.isChecked()
+        self._recap_only = False  # Tag Folder only
         self._current_flow = "download"
         self.log(f"Will save into: {target} (as {audio_format.upper()})")
         self._set_busy(True)
@@ -373,6 +380,17 @@ class MainWindow(QWidget):
 
     def _run_scan(self, paths: list[Path]) -> None:
         self._current_flow = "scan"
+        self._recap_only = self.tag_recap_only_check.isChecked()
+
+        if self._recap_only:
+            # No search — read tags locally, straight to recap.
+            self._set_busy(True)
+            self.log(f"Reading {len(paths)} file(s) locally (no search)…")
+            jobs = self._build_local_jobs(paths)
+            self._on_jobs_ready(jobs)
+            self._set_busy(False)
+            return
+
         self._set_busy(True)
 
         # Live progress window visualising the parallel lookups.
@@ -389,6 +407,23 @@ class MainWindow(QWidget):
         worker.failed.connect(self._on_worker_failed)
         self._scan_progress.show()
         self._run_worker(worker)
+
+    def _build_local_jobs(self, paths: list[Path]) -> list[TaggingJob]:
+        """Read each file's own tags/cover locally — no metadata search."""
+        jobs = []
+        for path in paths:
+            existing = tagging.read_tags(path)
+            cover = tagging.read_cover(path)
+            meta = SongMetadata(
+                title=existing.get("title") or "",
+                artist=existing.get("artist") or "",
+                album=existing.get("album") or "",
+                year=existing.get("year") or "",
+                track=existing.get("track") or "",
+                source_file=str(path),
+            )
+            jobs.append(TaggingJob(path=path, metadata=meta, original=existing, original_cover=cover))
+        return jobs
 
     def _browse_tag_folder(self) -> None:
         folder = QFileDialog.getExistingDirectory(
@@ -439,7 +474,6 @@ class MainWindow(QWidget):
         # Per-song outcome; None = not decided. Tracked by index so Back can re-decide.
         statuses: list[str | None] = [None] * total
         drafts: dict[int, dict] = {}  # remembered Save-as edits per song
-        apply_all = False
         cancelled = False
         last_saved_name = ""
 
@@ -447,62 +481,68 @@ class MainWindow(QWidget):
         self.progress_bar.setRange(0, total)
         self.progress_bar.setValue(0)
 
-        i = 0
-        while i < total:
-            job = jobs[i]
+        if self._recap_only:
+            # Tag Folder only: no search, no write, straight to recap.
+            for i in range(total):
+                statuses[i] = "kept"
+                self.progress_bar.setValue(i + 1)
+        else:
+            i = 0
+            apply_all = False
+            while i < total:
+                job = jobs[i]
 
-            if apply_all:
-                # Apply each remaining song's preview defaults, as an unedited Save would.
-                PreviewDialog.apply_default_metadata(job, self)
-                ok = self._save_job(job)
-                statuses[i] = "saved" if ok else "failed"
-                if ok:
-                    last_saved_name = job.path.name
+                if apply_all:
+                    # Apply each remaining song's preview defaults, as an unedited Save would.
+                    PreviewDialog.apply_default_metadata(job, self)
+                    ok = self._save_job(job)
+                    statuses[i] = "saved" if ok else "failed"
+                    if ok:
+                        last_saved_name = job.path.name
+                    self.progress_bar.setValue(i + 1)
+                    i += 1
+                    continue
+
+                dialog = PreviewDialog(
+                    job, i + 1, total, self,
+                    draft=drafts.get(i), can_go_back=(i > 0),
+                )
+                dialog.exec()
+                action = dialog.action
+                drafts[i] = dialog.draft  # keep edits in case this song is revisited
+
+                if action == PreviewDialog.BACK:
+                    i -= 1
+                    continue
+
+                if action in (PreviewDialog.SAVE, PreviewDialog.SAVE_ALL):
+                    # Re-saving a saved song is safe: tags are rewritten in place.
+                    ok = self._save_job(job)
+                    statuses[i] = "saved" if ok else "failed"
+                    if ok:
+                        last_saved_name = job.path.name
+                    if action == PreviewDialog.SAVE_ALL:
+                        apply_all = True
+                elif action == PreviewDialog.SKIP:
+                    # Keep the file in Downloads/ so Back can still save it; cleaned up at the end.
+                    statuses[i] = "skipped"
+                    self.log(f"Skipped: {job.path.name}")
+                else:  # CANCEL: stop here; un-saved files are cleaned up below
+                    cancelled = True
+                    verb = "Download" if self._current_flow == "download" else "Tagging"
+                    self.log(f"{verb} cancelled.")
+                    break
+
                 self.progress_bar.setValue(i + 1)
                 i += 1
-                continue
 
-            dialog = PreviewDialog(
-                job, i + 1, total, self,
-                draft=drafts.get(i), can_go_back=(i > 0),
-            )
-            dialog.exec()
-            action = dialog.action
-            drafts[i] = dialog.draft  # keep edits in case this song is revisited
-
-            if action == PreviewDialog.BACK:
-                i -= 1
-                continue
-
-            if action in (PreviewDialog.SAVE, PreviewDialog.SAVE_ALL):
-                # Re-saving a saved song is safe: tags are rewritten in place.
-                ok = self._save_job(job)
-                statuses[i] = "saved" if ok else "failed"
-                if ok:
-                    last_saved_name = job.path.name
-                if action == PreviewDialog.SAVE_ALL:
-                    apply_all = True
-            elif action == PreviewDialog.SKIP:
-                # Keep the file in Downloads/ so Back can still save it; cleaned up at the end.
-                statuses[i] = "skipped"
-                self.log(f"Skipped: {job.path.name}")
-            else:  # CANCEL: stop here; un-saved files are cleaned up below
-                cancelled = True
-                verb = "Download" if self._current_flow == "download" else "Tagging"
-                self.log(f"{verb} cancelled.")
-                break
-
-            self.progress_bar.setValue(i + 1)
-            i += 1
-
-        # A completed bulk job gets an editable recap before anything is deleted.
-        if not cancelled and total > 1:
+        # Recap: always in recap-only mode, else for a completed multi-song batch.
+        if self._recap_only or (not cancelled and total > 1):
             self._run_recap_loop(jobs, statuses, drafts, total)
 
-        # Remove every downloaded file the user didn't keep (kept until now so
-        # Back / recap could still save them).
+        # Remove downloads the user didn't keep.
         for job, status in zip(jobs, statuses):
-            if status != "saved":
+            if status not in ("saved", "kept"):
                 self._discard_download(job)
 
         # Reset the bar to idle (fixes it lingering after a cancel).
@@ -511,12 +551,18 @@ class MainWindow(QWidget):
 
         saved = statuses.count("saved")
         skipped = statuses.count("skipped")
+        kept = statuses.count("kept")
         failed = statuses.count("failed")
-        self.log(f"Finished. Saved {saved}, skipped {skipped}" + (f", failed {failed}" if failed else "") + ".")
+        self.log(
+            f"Finished. Saved {saved}, skipped {skipped}"
+            + (f", kept as-is {kept}" if kept else "")
+            + (f", failed {failed}" if failed else "")
+            + "."
+        )
         # The recap already covered a completed bulk job; only single items and
         # cancelled batches still get the message-box summary.
-        if cancelled or total == 1:
-            self._show_summary(total, saved, skipped, failed, cancelled, last_saved_name)
+        if not self._recap_only and (cancelled or total == 1):
+            self._show_summary(total, saved, skipped, kept, failed, cancelled, last_saved_name)
 
     def _run_recap_loop(self, jobs, statuses, drafts, total) -> None:
         """Show the recap; let the user re-edit individual songs, then close."""
@@ -537,18 +583,20 @@ class MainWindow(QWidget):
                 statuses[i] = "skipped"
             # CANCEL / closing the window leaves the song's status unchanged.
 
-    def _show_summary(self, total, saved, skipped, failed, cancelled, last_saved_name) -> None:
+    def _show_summary(self, total, saved, skipped, kept, failed, cancelled, last_saved_name) -> None:
         # Single item: a simple success/notice, no "bulk" wording.
         if total == 1:
             if saved == 1:
                 QMessageBox.information(self, "Done", f"Saved “{last_saved_name}”.")
             elif failed:
                 QMessageBox.warning(self, "Failed", "Could not save the song. See the log.")
-            # skipped/cancelled single item: no popup, just the log.
+            # skipped/kept/cancelled single item: no popup, just the log.
             return
 
         # Bulk summary.
         parts = [f"Saved: {saved}", f"Skipped: {skipped}"]
+        if kept:
+            parts.append(f"Kept as-is: {kept}")
         if failed:
             parts.append(f"Failed: {failed}")
         body = "\n".join(parts)

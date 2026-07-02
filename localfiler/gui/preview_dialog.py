@@ -201,6 +201,10 @@ class PreviewDialog(QDialog):
         if self._draft is not None:
             self._restore_draft()
 
+        # No prior search (Tag Folder recap-only) — search now on open.
+        if not self._headless and not self.job.metadata.outcomes:
+            self._search_again()
+
     # -- layout builders ----------------------------------------------
     def _build_source_row(self):
         self.source_combo = QComboBox()
