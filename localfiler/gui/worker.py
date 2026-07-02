@@ -12,7 +12,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 
-from ..core import downloader, setup
+from ..core import downloader, setup, updater
 from ..core.filename_parser import parse
 from ..core.metadata import aggregator
 from ..core.tagging import read_cover, read_tags
@@ -89,6 +89,44 @@ class YtDlpUpdateWorker(QThread):
     def run(self) -> None:
         ok, output = downloader.ytdlp_update()
         self.done.emit(ok, output)
+
+
+class AppUpdateCheckWorker(QThread):
+    """Check GitHub for a newer Local Filer release."""
+
+    done = Signal(str, str)  # (tag, download_url) - empty tag means up to date
+    failed = Signal(str)
+
+    def run(self) -> None:
+        try:
+            result = updater.check_latest()
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(str(exc))
+            return
+        tag, url = result if result else ("", "")
+        self.done.emit(tag, url)
+
+
+class AppUpdateDownloadWorker(QThread):
+    """Download + stage a new Local Filer release; the caller applies it after."""
+
+    status = Signal(str)
+    progress_value = Signal(float)  # overall fraction 0.0-1.0
+    done = Signal(str)              # staged app folder path
+    failed = Signal(str)
+
+    def __init__(self, url: str):
+        super().__init__()
+        self.url = url
+
+    def run(self) -> None:
+        try:
+            staged = updater.download_and_stage(
+                self.url, progress_cb=self.progress_value.emit, status_cb=self.status.emit
+            )
+            self.done.emit(str(staged))
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(str(exc))
 
 
 class SetupWorker(QThread):

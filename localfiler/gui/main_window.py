@@ -26,14 +26,16 @@ from PySide6.QtWidgets import (
 )
 
 from .. import config
-from ..core import covers, downloader, tagging
+from ..core import covers, downloader, tagging, updater
 from ..models import SongMetadata
 from .drop import DropTarget
 from .preview_dialog import PreviewDialog
 from .recap_dialog import RecapDialog
 from .scan_progress_dialog import ScanProgressDialog
 from .sites_dialog import SitesDialog
+from .update_dialog import UpdateDialog
 from .worker import (
+    AppUpdateCheckWorker,
     DownloadWorker,
     ScanWorker,
     TaggingJob,
@@ -56,6 +58,9 @@ class MainWindow(QWidget):
         self._recap_only = False  # "Only show recap" for the batch in progress
 
         self._yt_worker = None  # keep update/check QThread alive while running
+        self._app_update_worker = None  # keep the self-update check QThread alive
+        self._pending_update_tag = ""
+        self._pending_update_url = ""
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_download_tab(), "Download")
@@ -263,7 +268,36 @@ class MainWindow(QWidget):
         help_row.addWidget(self.genius_help_btn)
         help_row.addStretch()
 
-        # --- Updates (just yt-dlp for now; room for more engines later) ---
+        # --- Updates: Local Filer itself, plus the yt-dlp download engine ---
+        self._app_name_label = QLabel("Local Filer")
+        self._app_name_label.setStyleSheet(
+            "font-family: 'Segoe UI Semibold', 'Segoe UI'; font-size: 17px; "
+            "font-weight: 800; letter-spacing: 0.3px; color: #fff;"
+        )
+        self._app_version_label = QLabel(f"v{updater.current_version()}")
+        self._app_version_label.setStyleSheet("color: #888; font-size: 11px;")
+        app_name_col = QVBoxLayout()
+        app_name_col.setSpacing(0)
+        app_name_col.addWidget(self._app_name_label)
+        app_name_col.addWidget(self._app_version_label)
+
+        self.app_update_btn = QPushButton("Update now")
+        self.app_update_btn.clicked.connect(self._run_app_update)
+        self.app_update_btn.hide()  # only shown once an update is found
+        self.app_check_updates_btn = QPushButton("Check for updates")
+        self.app_check_updates_btn.clicked.connect(self._check_app_update)
+        if not updater.is_frozen():
+            self.app_check_updates_btn.setEnabled(False)
+            self.app_check_updates_btn.setToolTip("Only available in the packaged app.")
+        self._app_status_label = QLabel("")
+        self._app_status_label.setWordWrap(True)
+        self._app_status_label.setStyleSheet("color: #888;")
+        self._app_status_label.hide()  # no reserved space until there's something to say
+        app_update_row = QHBoxLayout()
+        app_update_row.addLayout(app_name_col, 1)
+        app_update_row.addWidget(self.app_update_btn, 0, Qt.AlignmentFlag.AlignTop)
+        app_update_row.addWidget(self.app_check_updates_btn, 0, Qt.AlignmentFlag.AlignTop)
+
         self._ytdlp_label = QLabel("yt-dlp")
         self.update_btn = QPushButton("Update now")
         self.update_btn.clicked.connect(self._run_ytdlp_update)
@@ -294,6 +328,9 @@ class MainWindow(QWidget):
         layout.addWidget(sep)
         layout.addSpacing(12)
         layout.addWidget(QLabel("<b>Updates</b>"))
+        layout.addLayout(app_update_row)
+        layout.addWidget(self._app_status_label)
+        layout.addSpacing(4)
         layout.addLayout(ytdlp_row)
         layout.addWidget(ytdlp_desc)
         layout.addStretch()
@@ -739,6 +776,39 @@ class MainWindow(QWidget):
         lay = QVBoxLayout(dlg)
         lay.addWidget(body)
         lay.addLayout(btn_row)
+        dlg.exec()
+
+    # ------------------------------------------------------ Local Filer update
+    def _set_app_status(self, text: str) -> None:
+        self._app_status_label.setText(text)
+        self._app_status_label.show()
+
+    def _check_app_update(self) -> None:
+        self.app_check_updates_btn.setEnabled(False)
+        self.app_update_btn.hide()
+        self._set_app_status("Checking…")
+        worker = AppUpdateCheckWorker()
+        worker.done.connect(self._on_app_checked)
+        worker.failed.connect(self._on_app_check_failed)
+        self._app_update_worker = worker
+        worker.start()
+
+    def _on_app_checked(self, tag: str, url: str) -> None:
+        self.app_check_updates_btn.setEnabled(True)
+        if tag and updater.is_newer(tag, updater.current_version()):
+            self._set_app_status(f"Update available: {tag}")
+            self._pending_update_tag = tag
+            self._pending_update_url = url
+            self.app_update_btn.show()
+        else:
+            self._set_app_status("Up to date.")
+
+    def _on_app_check_failed(self, message: str) -> None:
+        self.app_check_updates_btn.setEnabled(True)
+        self._set_app_status(f"Check failed ({message}).")
+
+    def _run_app_update(self) -> None:
+        dlg = UpdateDialog(self._pending_update_tag, self._pending_update_url, self)
         dlg.exec()
 
     # ----------------------------------------------------------- yt-dlp update
