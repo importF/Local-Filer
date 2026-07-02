@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication
 
 from . import config
 from .core import setup
@@ -23,12 +23,6 @@ def main() -> int:
     if setup.missing_components():
         SetupDialog().exec()
         if setup.missing_components():
-            QMessageBox.critical(
-                None,
-                "Setup required",
-                "Local Filer needs yt-dlp and ffmpeg to run, and setup didn't "
-                "finish. Please relaunch and complete the one-time setup.",
-            )
             return 1
 
     window = MainWindow()

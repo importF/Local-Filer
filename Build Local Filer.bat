@@ -7,6 +7,13 @@ if errorlevel 1 goto :error
 
 echo.
 echo Build complete: dist\Local Filer\Local Filer.exe
+
+echo Zipping release...
+if exist "dist\Windows.zip" del "dist\Windows.zip"
+powershell -NoProfile -Command "Compress-Archive -Path 'dist\Local Filer\Local Filer.exe','dist\Local Filer\_internal' -DestinationPath 'dist\Windows.zip'"
+if errorlevel 1 goto :error
+
+echo Zip complete: dist\Windows.zip
 pause
 goto :eof
 
