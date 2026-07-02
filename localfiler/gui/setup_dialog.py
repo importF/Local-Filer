@@ -108,8 +108,7 @@ class SetupDialog(QDialog):
         self._intro.setText(
             "<b>Local Filer needs a couple of components to download and "
             "convert audio.</b><br>This one-time setup will fetch:"
-            f"<ul>{items}</ul>They're saved next to the app. Required — the app "
-            "can't run without them."
+            f"<ul>{items}</ul>The files are saved next to the app."
         )
 
     def _start(self) -> None:
